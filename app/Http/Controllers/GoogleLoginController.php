@@ -14,13 +14,13 @@ class GoogleLoginController extends Controller
     public function login(Request $request) {
         // Verificamos el token de Google
         $client  = new Google_Client(['client_id' => env('GOOGLE_CLIENT_ID')]);  
-        $payload = $client->verifyIdToken($request->credential);
+        $google_user = $client->verifyIdToken($request->credential);
 
         // Si el token no es válido, retornamos un error
-        if(!$payload) 
+        if(!$google_user) 
             return response()->json(['status' => 'error', 'message' => 'Token ID inválido'], 401);
 
-        $email = $payload['email'];
+        $email = $google_user['email'];
 
         // Verificamos que el dominio del correo sea válido
         [$user, $domain] = explode('@', $email);
@@ -29,18 +29,28 @@ class GoogleLoginController extends Controller
         if ($domain !== env('ALLOWED_EMAIL_DOMAIN')) 
             return response()->json(['status' => 'error', 'message' => 'Dominio inválido'], 500);
 
-        $name = $payload['name'];
+        // Buscamos al usuario en la base de datos
+        $user = Usuario::where('correo', $email)->select('codigo', 'usuario')->first();
 
-        $user = (array) DB::table('usuarios')->where('correo', $email)->first();
-        $user['google_name'] = $name;
+        // Si el usuario no existe, retornamos un error
+        if(!$user)
+            return response()->json(['status' => 'error', 'message' => 'No tienes acceso'], 401);
+        
+        // Creamos el payload del token
+        $payload = [
+            'codigo'  => $user->codigo,
+            'usuario' => $user->usuario,
+            'nombre'  => $google_user['name'],
+            'avatar'  => $google_user['picture'],
+        ];
         
         // Token de acceso
-        $user['exp'] = time() + 60 * 60; // 1 hora
-        $accessToken  = JWT::encode(payload: $user, key: env('API_GA_JWT_SECRET'), alg: 'HS256');
+        $payload['exp'] = time() + 60 * 60; // 1 hora
+        $accessToken  = JWT::encode(payload: $payload, key: env('API_GA_JWT_SECRET'), alg: 'HS256');
 
         // Token de refresco
-        $user['exp'] = time() + 60 * 60 * 8 ; // 8 horas
-        $refreshToken = JWT::encode(payload: $user, key: env('API_GA_JWT_SECRET'), alg: 'HS256');
+        $payload['exp'] = time() + 60 * 60 * 8 ; // 8 horas
+        $refreshToken = JWT::encode(payload: $payload, key: env('API_GA_JWT_SECRET'), alg: 'HS256');
 
         // CSRF Token
         $csrfToken    = bin2hex(random_bytes(32));
@@ -53,12 +63,6 @@ class GoogleLoginController extends Controller
           ->withCookie(self::createCookie(name: 'ga_csrf_token'   , value: $csrfToken   ));
     }
 
-    public function createRespsonse($email, $cfsToken){
-        return response()->json([
-            'email' => Usuario::where('correo', $email)->first(),
-            'cfsToken' => $cfsToken
-        ]);
-    }
     
     public function createCookie($name, $value){
         return cookie( name: $name, value: $value, minutes: 60, path: null, domain: null, secure: true, httpOnly: true, sameSite: 'None' );

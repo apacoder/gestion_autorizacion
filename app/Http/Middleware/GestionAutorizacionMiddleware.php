@@ -9,8 +9,9 @@ use Firebase\JWT\ExpiredException;
 use Firebase\JWT\SignatureInvalidException;
 use Firebase\JWT\BeforeValidException;
 use Firebase\JWT\Key;
+use Illuminate\Database\Eloquent\Model;
 
-class AuthenticateJWT
+class GestionAutorizacionMiddleware
 {
     public function handle(Request $request, Closure $next)
     {
@@ -32,11 +33,11 @@ class AuthenticateJWT
             // Intentamos decodificar el token de acceso
             $payload = JWT::decode($accessToken, new Key(env('API_GA_JWT_SECRET'), 'HS256'));
 
-            // Declaramos el siguiente middleware
-            $response = $next($request);
-
-            // Anexamos el usuario al request
-            $request->merge(['user' => $payload]);
+            // Casteamos el payload a un objeto que extiende de Illuminate\Database\Eloquent\Model
+            $jwt = new JWTPayload($payload);
+            
+            // Finalmente, agregamos el payload decodificado a la solicitud
+            $request->merge(['jwt' => $jwt]);
             
         } catch (ExpiredException $e) {
             return response()->json(['status' => 'error', 'message' => 'Token expirado'           ], 401);
@@ -49,6 +50,13 @@ class AuthenticateJWT
         }
 
         // Si el token es válido, permitimos que la solicitud continúe
-        return $response;
+        return $next($request);
+    }
+}
+
+// Clase auxiliar para manejar el payload del token JWT e indexarlo en el request
+class JWTPayload extends Model {
+    public function __construct($data = []) {
+        foreach ($data as $key => $value) $this->$key = $value;
     }
 }
