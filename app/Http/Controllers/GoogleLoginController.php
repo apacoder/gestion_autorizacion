@@ -2,32 +2,47 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Usuario;
 use Illuminate\Http\Request;
 use Google_Client;
 use Firebase\JWT\JWT;
 use Firebase\JWT\Key;
+use Illuminate\Support\Facades\DB;
 
 class GoogleLoginController extends Controller
 {
     public function login(Request $request) {
-        $client  = new Google_Client(['client_id' => env('GOOGLE_CLIENT_ID')]);  // Especifica tu Google Client ID aquí
+        // Verificamos el token de Google
+        $client  = new Google_Client(['client_id' => env('GOOGLE_CLIENT_ID')]);  
         $payload = $client->verifyIdToken($request->credential);
 
+        // Si el token no es válido, retornamos un error
         if(!$payload) 
             return response()->json(['status' => 'error', 'message' => 'Token ID inválido'], 401);
 
         $email = $payload['email'];
-        $name = $payload['name'];
 
+        // Verificamos que el dominio del correo sea válido
         [$user, $domain] = explode('@', $email);
 
+        // Si el dominio no es válido, retornamos un error
         if ($domain !== env('ALLOWED_EMAIL_DOMAIN')) 
             return response()->json(['status' => 'error', 'message' => 'Dominio inválido'], 500);
 
-        $user = [ 'email' => $email, 'name' => $name ];
+        $name = $payload['name'];
 
+        $user = (array) DB::table('usuarios')->where('correo', $email)->first();
+        $user['google_name'] = $name;
+        
+        // Token de acceso
+        $user['exp'] = time() + 60 * 60; // 1 hora
         $accessToken  = JWT::encode(payload: $user, key: env('API_GA_JWT_SECRET'), alg: 'HS256');
+
+        // Token de refresco
+        $user['exp'] = time() + 60 * 60 * 8 ; // 8 horas
         $refreshToken = JWT::encode(payload: $user, key: env('API_GA_JWT_SECRET'), alg: 'HS256');
+
+        // CSRF Token
         $csrfToken    = bin2hex(random_bytes(32));
         
         return response()->json([
@@ -38,49 +53,15 @@ class GoogleLoginController extends Controller
           ->withCookie(self::createCookie(name: 'ga_csrf_token'   , value: $csrfToken   ));
     }
 
-    public function logout() {
+    public function createRespsonse($email, $cfsToken){
         return response()->json([
-            'status' => 'success'
-        ])->withCookie(self::createCookie(name: 'ga_access_token' , value: ''))
-          ->withCookie(self::createCookie(name: 'ga_refresh_token', value: ''))
-          ->withCookie(self::createCookie(name: 'ga_csrf_token'   , value: ''));
-    }
-
-    public function refresh_token(Request $request)
-    {
-        $refreshToken = $request->cookie('ga_refresh_token');
-        $accessToken  = $request->cookie('ga_access_token');
-
-        if(!$refreshToken || !$accessToken)
-            return response()->json(['status' => 'error', 'message' => 'Token inválido'], 401);
-
-        $payload = JWT::decode($refreshToken, new Key(env('API_GA_JWT_SECRET'), 'HS256'));
-
-        $user = [ 'email' => $payload->email, 'name' => $payload->name ];
-
-        $accessToken  = JWT::encode(payload: $user, key: env('API_GA_JWT_SECRET'), alg: 'HS256');
-        $refreshToken = JWT::encode(payload: $user, key: env('API_GA_JWT_SECRET'), alg: 'HS256');
-        $csrfToken    = bin2hex(random_bytes(32));
-
-        return response()->json([
-            'user'          => $user,
-            'ga_csrf_token' => $csrfToken,
-        ])->withCookie(self::createCookie(name: 'ga_access_token' , value: $accessToken ))
-          ->withCookie(self::createCookie(name: 'ga_refresh_token', value: $refreshToken))
-          ->withCookie(self::createCookie(name: 'ga_csrf_token'   , value: $csrfToken   ));
+            'email' => Usuario::where('correo', $email)->first(),
+            'cfsToken' => $cfsToken
+        ]);
     }
     
     public function createCookie($name, $value){
-        return cookie(
-            name     : $name, 
-            value    : $value, 
-            minutes  : 60, 
-            path     : null, 
-            domain   : null, 
-            secure   : true, 
-            httpOnly : true, 
-            sameSite : 'None'
-        );
+        return cookie( name: $name, value: $value, minutes: 60, path: null, domain: null, secure: true, httpOnly: true, sameSite: 'None' );
     }
 
 }
